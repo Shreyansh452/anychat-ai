@@ -1,0 +1,13 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.wav
+*.mp3
+*.mp4
+*.mkv
+*.avi
+data/
+.gradio/
+chroma_db/
