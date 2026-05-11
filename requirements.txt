@@ -1,0 +1,15 @@
+langchain
+langchain-community
+chromadb
+sentence-transformers
+faster-whisper
+torch
+pymupdf
+python-docx
+opencv-python
+groq
+gradio
+python-dotenv
+fastapi
+uvicorn
+google-generativeai
