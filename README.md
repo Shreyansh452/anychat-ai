@@ -10,6 +10,10 @@ app_file: app.py
 pinned: false
 ---
 
+---
+🚀 **Live Demo**: https://huggingface.co/spaces/mshreyansh452/anychat-ai
+---
+
 # 🧠 AnyChat AI — Multimodal RAG Chatbot
 
 > Chat with **any document, audio, or video** using natural language. Get answers with exact page numbers and timestamps.
@@ -170,9 +174,7 @@ anychat-ai/
 - [ ] OCR fallback for low-quality scanned documents
 
 ---
----
-🚀 **Live Demo**: https://huggingface.co/spaces/mshreyansh452/anychat-ai
----
+
 
 ## 👤 Author
 
