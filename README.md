@@ -170,6 +170,9 @@ anychat-ai/
 - [ ] OCR fallback for low-quality scanned documents
 
 ---
+---
+🚀 **Live Demo**: https://huggingface.co/spaces/mshreyansh452/anychat-ai
+---
 
 ## 👤 Author
 
