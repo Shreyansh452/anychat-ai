@@ -1,6 +1,6 @@
 ---
 title: AnyChat AI
-emoji: 🧠
+emoji:  🚀
 colorFrom: blue
 colorTo: purple
 sdk: gradio
@@ -52,43 +52,10 @@ Upload any file — a research paper, a podcast, a lecture video — and have a 
 
 ## 🏗️ Architecture
 
-┌─────────────────────────────────────────────────────────┐
-│                     FILE UPLOAD                         │
-│          PDF │ DOCX │ MP3 │ WAV │ MP4 │ MKV             │
-└──────────────────────┬──────────────────────────────────┘
-│
-┌───────────▼───────────┐
-│   INGESTION PIPELINE  │
-│  ┌─────────────────┐  │
-│  │ Text PDF/DOCX   │  │  PyMuPDF / python-docx
-│  │ Scanned PDF     │  │  Groq Vision (Llama 4)
-│  │ Audio           │  │  faster-whisper
-│  │ Video frames    │  │  Groq Vision (Llama 4)
-│  │ Video speech    │  │  ffmpeg + faster-whisper
-│  └────────┬────────┘  │
-└───────────┼───────────┘
-│ chunks + metadata
-│ {text, source, page, start_time, end_time}
-┌───────────▼───────────┐
-│  EMBEDDING + STORAGE  │
-│  all-MiniLM-L6-v2     │  sentence-transformers
-│  ChromaDB (local)     │  cosine similarity index
-└───────────┬───────────┘
-│
-┌───────────▼───────────┐
-│   QUERY PIPELINE      │
-│  ┌─────────────────┐  │
-│  │ Timestamp query?│  │  "at 1:38" → direct lookup
-│  │ Semantic query? │  │  embedding similarity search
-│  └────────┬────────┘  │
-└───────────┼───────────┘
-│ top-k chunks
-┌───────────▼───────────┐
-│   LLM GENERATION      │
-│  Groq (Llama 3.1 8B)  │  cited answer with sources
-└───────────────────────┘
+<p align="center">
+  <img src="architecture.png" width="1000"/>
+</p>
 
----
 
 ## 🛠️ Tech Stack
 
@@ -135,20 +102,20 @@ Get a free Groq API key at https://console.groq.com
 
 ## 📁 Project Structure
 
+```bash
 anychat-ai/
 ├── ingestion/
-│   └── ingestor.py      # PDF, DOCX, audio, video parsers
+│   └── ingestor.py         # PDF, DOCX, audio, video parsers
 ├── vectorstore/
-│   └── store.py         # ChromaDB wrapper + embedding logic
+│   └── store.py            # ChromaDB wrapper + embedding logic
 ├── retrieval/
-│   └── rag.py           # query routing + LLM answer generation
+│   └── rag.py              # Query routing + LLM answer generation
 ├── ui/
-│   └── app.py           # Gradio interface
-├── app.py               # HF Spaces entry point
-├── requirements.txt
-└── packages.txt         # system deps for Linux deployment
-
----
+│   └── app.py              # Gradio interface
+├── app.py                  # HF Spaces entry point
+├── requirements.txt        # Python dependencies
+└── packages.txt            # Linux system dependencies
+```
 
 ## 💡 Design Decisions
 
