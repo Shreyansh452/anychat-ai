@@ -91,7 +91,7 @@ def chat(message, history, source_filter):
 # ── UI ────────────────────────────────────────────────────────────────────────
 with gr.Blocks(title="AnyChat AI") as demo:
 
-    gr.Markdown("# 🧠 AnyChat AI\n### Chat with your documents, audio, and video files")
+    gr.Markdown("# 🚀 AnyChat AI\n### Chat with your documents, audio, and video files")
 
     with gr.Row():
 
