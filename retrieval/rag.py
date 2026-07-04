@@ -1,5 +1,5 @@
 from groq import Groq
-from vectorstore.store import VectorStore
+from vectorstore.store import VectorStore, expand_query
 from dotenv import load_dotenv
 import os
 import re
@@ -8,6 +8,41 @@ load_dotenv()
 
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 store = VectorStore()
+
+GENERIC_PATTERNS = [
+    "hi", "hello", "hey", "hii", "helo",
+    "how are you", "what are you", "who are you",
+    "what can you do", "help", "thanks", "thank you",
+    "bye", "goodbye", "ok", "okay", "cool", "nice",
+    "what is this", "how does this work"
+]
+
+GENERIC_RESPONSES = {
+    "greeting": "Hey! I'm AnyChat AI. Upload a PDF, audio, or video file and ask me anything about it — I'll answer with exact page numbers and timestamps.",
+    "what_are_you": "I'm AnyChat AI — a multimodal RAG chatbot. I can read PDFs (including scanned ones), transcribe audio, and understand video. Upload any file and ask me questions about it.",
+    "what_can_you_do": "I can:\n- 📄 Answer questions from PDFs and Word docs (with page numbers)\n- 🎵 Answer from audio files (with timestamps)\n- 🎥 Answer from videos (transcript + visual scene understanding)\n\nJust upload a file and start asking!",
+    "thanks": "You're welcome! Feel free to upload more files or ask more questions.",
+    "default": "Hi there! Upload a document, audio, or video file using the panel on the left, then ask me anything about it."
+}
+
+
+def is_generic_message(question: str) -> bool:
+    """Detect greetings and small talk."""
+    q = question.lower().strip().rstrip("!?.").strip()
+    return q in GENERIC_PATTERNS or len(q.split()) <= 1 and len(q) < 6
+
+
+def get_generic_response(question: str) -> str:
+    q = question.lower().strip()
+    if any(w in q for w in ["what are you", "who are you", "what is anychat"]):
+        return GENERIC_RESPONSES["what_are_you"]
+    if any(w in q for w in ["what can you do", "how does this work", "help"]):
+        return GENERIC_RESPONSES["what_can_you_do"]
+    if any(w in q for w in ["thanks", "thank you", "great", "nice", "cool"]):
+        return GENERIC_RESPONSES["thanks"]
+    if any(w in q for w in ["hi", "hello", "hey", "hii"]):
+        return GENERIC_RESPONSES["greeting"]
+    return GENERIC_RESPONSES["default"]
 
 
 def format_timestamp(seconds: float) -> str:
@@ -74,55 +109,79 @@ def search_by_timestamp(timestamp_sec: float, window: float = 30.0) -> list:
     return results
 
 
-def ask(question: str, top_k: int = 4, source_filter: str = None) -> dict:
-    
-    """
-    Full RAG pipeline:
-    1. Embed question
-    2. Retrieve top_k chunks
-    3. Build prompt
-    4. Call LLM
-    5. Return answer + sources
-    """
+def parse_page_number(question: str):
+    """Detect queries like 'page 4', 'page four', 'pg 4'"""
+    match = re.search(r'\bpage\s+(\d+)\b', question.lower())
+    if match:
+        return int(match.group(1))
+    return None
 
-    # step 1 & 2 — retrieve
+
+def search_by_page(page_number: int) -> list:
+    """Fetch all chunks from a specific page."""
+    all_chunks = store.collection.get(include=["documents", "metadatas"])
+    results = []
+    for i, meta in enumerate(all_chunks["metadatas"]):
+        if meta.get("page") == page_number:
+            results.append({
+                "text": all_chunks["documents"][i],
+                "metadata": meta,
+                "distance": 0.0,
+                "id": all_chunks["ids"][i]
+            })
+    return results
+
+
+def ask(question: str, top_k: int = 6, source_filter: str = None) -> dict:
+    if is_generic_message(question):
+        return {"answer": get_generic_response(question), "sources": []}
+
     try:
         if source_filter and source_filter.lower() == "all":
             source_filter = None
 
-        # ── timestamp query detection ─────────────────────────────────────────────────────────────────────
-        timestamp = parse_timestamp(question)
-        if timestamp is not None:
-            print(f"[RAG] Timestamp query detected: {timestamp}s")
+        # ── page number query ────────────────────────────────────────────
+        page_num = parse_page_number(question)
+        if page_num is not None:
+            print(f"[RAG] Page query detected: page {page_num}")
+            results = search_by_page(page_num)
+            if not results:
+                results = store.search(expand_query(question), top_k=top_k, source_filter=source_filter)
+
+        # ── timestamp query ──────────────────────────────────────────────
+        elif parse_timestamp(question) is not None:
+            timestamp = parse_timestamp(question)
             results = search_by_timestamp(timestamp)
             if not results:
-                # fallback — find nearest chunk
-                results = store.search(question, top_k=top_k, source_filter=source_filter)
-        else:
-            results = store.search(question, top_k=top_k, source_filter=source_filter)
+                results = store.search(expand_query(question), top_k=top_k, source_filter=source_filter)
 
-        print(f"[RAG] Found {len(results)} results")
+        # ── semantic search ──────────────────────────────────────────────
+        else:
+            results = store.search(expand_query(question), top_k=top_k, source_filter=source_filter)
 
     except Exception as e:
         return {"answer": f"Search error: {str(e)}", "sources": []}
 
     if not results:
         return {
-            "answer": "I couldn't find relevant information in the uploaded documents.",
+            "answer": "I couldn't find relevant information in the uploaded documents. Try rephrasing or upload a relevant file first.",
             "sources": []
         }
 
-    # step 3 — build prompt
     context = build_context(results)
 
-    system_prompt = """You are a helpful assistant that answers questions based strictly on the provided context.
+    system_prompt = """You are a helpful assistant that answers questions based on the provided context.
 
 Rules:
-- Only use information from the context below
-- Always cite your sources using the [Source N] labels
-- If answering from a video or audio, mention the timestamp (e.g. "at 02:14")
-- If answering from a document, mention the page number
-- If the context doesn't contain the answer, say "I don't have enough information to answer this"
+- Use information from the context to answer
+- For inferential questions (moral, theme, summary, conclusion),
+  synthesize an answer from the overall context even if the exact
+  word doesn't appear
+- Always cite your sources using [Source N] labels
+- If answering from video/audio mention the timestamp
+- If answering from a document mention the page number
+- Only say you don't have information if the context is
+  completely unrelated to the question
 - Be concise and direct"""
 
     user_prompt = f"""Context:

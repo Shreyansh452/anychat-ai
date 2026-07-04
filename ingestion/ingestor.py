@@ -50,49 +50,14 @@ def pdf_page_to_base64(page) -> str:
 
 
 def ingest_pdf(filepath: str) -> List[Chunk]:
-    groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
     chunks = []
     doc = fitz.open(filepath)
 
     for page_num, page in enumerate(doc, start=1):
-        # first try normal text extraction
         text = page.get_text().strip()
-
-        # if empty → scanned page → use Groq Vision
-        if not text:
-            print(f"[PDF] Page {page_num} is scanned — using Groq Vision...")
-            try:
-                image_b64 = pdf_page_to_base64(page)
-                response = groq_client.chat.completions.create(
-                    model="meta-llama/llama-4-scout-17b-16e-instruct",
-                    messages=[{
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/jpeg;base64,{image_b64}"
-                                }
-                            },
-                            {
-                                "type": "text",
-                                "text": "Extract ALL text from this scanned document page. Return only the text content, preserving structure. Do not add commentary."
-                            }
-                        ]
-                    }],
-                    max_tokens=1000
-                )
-                text = response.choices[0].message.content.strip()
-            except Exception as e:
-                print(f"[PDF] Vision failed for page {page_num}: {e}")
-                continue
-
-        if not text:
-            continue
-
-        for part in chunk_text(text):
+        for idx, chunk_text_part in enumerate(chunk_text(text)):
             chunks.append(Chunk(
-                text=part,
+                text=chunk_text_part,
                 source=filepath,
                 source_type="pdf",
                 chunk_index=len(chunks),
@@ -179,6 +144,16 @@ def extract_audio_from_video(video_path: str) -> str:
     os.system(f'ffmpeg -y -i "{video_path}" -ac 1 -ar 16000 "{audio_path}" -loglevel quiet')
     return audio_path
 
+def get_frame_interval(fps: float, duration_seconds: float) -> int:
+    """Adaptive interval — shorter videos get more frames."""
+    if duration_seconds < 120:        # under 2 min → every 20s
+        return int(fps * 20)
+    elif duration_seconds < 600:      # under 10 min → every 30s
+        return int(fps * 30)
+    else:                             # longer → every 60s
+        return int(fps * 60)
+
+
 def describe_keyframes(filepath: str) -> List[Chunk]:
     """Send keyframes to Groq Vision to get scene descriptions."""
     groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
@@ -186,9 +161,13 @@ def describe_keyframes(filepath: str) -> List[Chunk]:
 
     cap = cv2.VideoCapture(filepath)
     fps = cap.get(cv2.CAP_PROP_FPS) or 25
-    interval_frames = int(fps * 60)   # every 60 seconds
-    frame_num = 0
+    total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+    duration = total_frames / fps
 
+    interval_frames = get_frame_interval(fps, duration)
+    print(f"[Vision] Video duration: {duration:.0f}s → frame every {interval_frames/fps:.0f}s")
+
+    frame_num = 0
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -196,7 +175,6 @@ def describe_keyframes(filepath: str) -> List[Chunk]:
 
         if frame_num % interval_frames == 0:
             try:
-                # encode frame as base64 jpeg
                 _, buffer = cv2.imencode(".jpg", frame)
                 image_b64 = base64.b64encode(buffer).decode("utf-8")
 
@@ -213,7 +191,7 @@ def describe_keyframes(filepath: str) -> List[Chunk]:
                             },
                             {
                                 "type": "text",
-                                "text": "Describe this video frame in detail: who is visible, what text appears on screen, what is happening, what is the setting. Be specific about any person's identity if recognizable."
+                                "text": "Describe this video frame in detail: who is visible, what text appears on screen, what is happening, what is the setting."
                             }
                         ]
                     }],
@@ -231,7 +209,6 @@ def describe_keyframes(filepath: str) -> List[Chunk]:
                         chunk_index=len(chunks),
                         start_time=timestamp,
                     ))
-                    print(f"[Vision] Frame at {timestamp}s described")
 
             except Exception as e:
                 print(f"[Vision] Frame skipped: {e}")

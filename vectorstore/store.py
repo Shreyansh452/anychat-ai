@@ -4,6 +4,7 @@ from sentence_transformers import SentenceTransformer
 from typing import List
 from ingestion.ingestor import Chunk
 import hashlib
+import re
 
 # version hash for chunk config — auto-separates old data if params change
 CHUNK_CONFIG_VERSION = hashlib.md5(
@@ -19,6 +20,41 @@ def get_embedding_model():
         print("[Embeddings] Loading all-MiniLM-L6-v2...")
         _embed_model = SentenceTransformer('all-MiniLM-L6-v2')
     return _embed_model
+
+
+# Query expansion helpers
+QUERY_EXPANSIONS = {
+    "moral": "main lesson conclusion key message takeaway",
+    "summary": "main points overview what discussed",
+    "gist": "main idea core message overview",
+    "theme": "main topic subject matter discussed",
+    "conclusion": "final point result outcome lesson",
+    "takeaway": "key learning main point conclusion",
+    "meaning": "main message purpose significance",
+    "point": "main argument key idea purpose",
+}
+
+
+def expand_query(question: str) -> str:
+    """Expand abstract queries with richer semantic terms.
+
+    Matches only whole words to avoid accidental substring matches (eg. "moral" in "immoral").
+    Returns the original question if no expansion keywords matched.
+    """
+    if not question:
+        return question
+
+    q_lower = question.lower()
+    expansions = []
+    for keyword, expansion in QUERY_EXPANSIONS.items():
+        # match whole words using regex word boundaries
+        if re.search(rf"\b{re.escape(keyword)}\b", q_lower):
+            expansions.append(expansion)
+    if expansions:
+        expanded = question + " " + " ".join(expansions)
+        print(f"[RAG] Query expanded: '{question}' → '{expanded}'")
+        return expanded
+    return question
 
 
 class VectorStore:
@@ -70,7 +106,9 @@ class VectorStore:
 
     def search(self, query: str, top_k: int = 5, source_filter: str = None):
         """Search for relevant chunks."""
-        query_embedding = self.embed_model.encode([query]).tolist()
+        # expand abstract queries (e.g., "summary", "moral") to improve recall
+        expanded_query = expand_query(query)
+        query_embedding = self.embed_model.encode([expanded_query]).tolist()
 
         try:
             if source_filter:

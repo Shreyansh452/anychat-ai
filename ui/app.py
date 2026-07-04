@@ -5,7 +5,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import gradio as gr
 from ingestion.ingestor import ingest_file
 from vectorstore.store import VectorStore
-from retrieval.rag import ask
+from retrieval.rag import ask, is_generic_message, get_generic_response
 from dotenv import load_dotenv
 from pathlib import Path
 
@@ -73,13 +73,17 @@ def chat(message, history, source_filter):
 
     history = history + [{"role": "user", "content": message}]
 
+    if is_generic_message(message):
+        history = history + [{"role": "assistant", "content": get_generic_response(message)}]
+        return history, ""
+
     if not ingested_files:
         history = history + [{"role": "assistant", "content": "⚠️ Please upload and index a file first."}]
         return history, ""
 
     try:
         filter_val = None if source_filter == "All" else source_filter.lower()
-        result = ask(message, top_k=4, source_filter=filter_val)
+        result = ask(message, top_k=6, source_filter=filter_val)
         answer = result["answer"] + format_sources(result["sources"])
     except Exception as e:
         answer = f"❌ Error calling LLM: {str(e)}"
