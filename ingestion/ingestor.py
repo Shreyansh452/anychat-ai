@@ -179,7 +179,7 @@ def describe_keyframes(filepath: str) -> List[Chunk]:
                 image_b64 = base64.b64encode(buffer).decode("utf-8")
 
                 response = groq_client.chat.completions.create(
-                    model="meta-llama/llama-4-scout-17b-16e-instruct",
+                    model="qwen/qwen3.6-27b",
                     messages=[{
                         "role": "user",
                         "content": [
@@ -222,6 +222,7 @@ def ingest_video(filepath: str) -> List[Chunk]:
 
     # 1. audio transcript via Whisper
     audio_path = extract_audio_from_video(filepath)
+    audio_chunks = []
     if os.path.exists(audio_path):
         audio_chunks = ingest_audio(audio_path)
         for c in audio_chunks:
@@ -230,13 +231,18 @@ def ingest_video(filepath: str) -> List[Chunk]:
         chunks.extend(audio_chunks)
         os.remove(audio_path)
 
-    # 2. visual scene understanding via Groq Vision (replaces pytesseract)
+    # 2. visual scene understanding via Groq Vision
     vision_chunks = describe_keyframes(filepath)
-    for i, c in enumerate(vision_chunks):
-        c.chunk_index = len(chunks) + i
     chunks.extend(vision_chunks)
 
-    print(f"[Video] {len(chunks)} total chunks from {filepath}")
+    # 3. CRITICAL FIX — reassign chunk_index and chunk_id AFTER combining
+    #    so audio and vision chunks never collide on the same ID
+    for i, c in enumerate(chunks):
+        c.chunk_index = i
+        c.chunk_id = f"{Path(filepath).stem}_{i}"
+
+    print(f"[Video] {len(chunks)} total chunks from {filepath} "
+          f"({len(audio_chunks)} audio + {len(vision_chunks)} vision)")
     return chunks
 
 
