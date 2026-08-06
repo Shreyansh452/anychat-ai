@@ -58,14 +58,13 @@ def expand_query(question: str) -> str:
 
 
 class VectorStore:
-    def __init__(self, persist_dir: str = "./chroma_db"):
+    def __init__(self, persist_dir: str = "./chroma_db", collection_name: str = "rag_chunks"):
         self.client = chromadb.PersistentClient(
             path=persist_dir,
             settings=Settings(anonymized_telemetry=False)
         )
-        # collection name includes version — auto-separates old data
         self.collection = self.client.get_or_create_collection(
-            name=f"rag_chunks_{CHUNK_CONFIG_VERSION}",
+            name=collection_name,
             metadata={"hnsw:space": "cosine"}
         )
         self.embed_model = get_embedding_model()
@@ -104,9 +103,21 @@ class VectorStore:
         )
         print(f"[VectorStore] Added {len(chunks)} chunks to ChromaDB")
 
+    def _ensure_collection(self):
+        """Re-fetch collection if it might be stale."""
+        try:
+            self.collection.count()
+        except Exception:
+            print("[VectorStore] Collection reference stale — reconnecting")
+            self.collection = self.client.get_or_create_collection(
+                name="rag_chunks",
+                metadata={"hnsw:space": "cosine"}
+            )
+
     def search(self, query: str, top_k: int = 5, source_filter: str = None):
         """Search for relevant chunks."""
         # expand abstract queries (e.g., "summary", "moral") to improve recall
+        self._ensure_collection()
         expanded_query = expand_query(query)
         query_embedding = self.embed_model.encode([expanded_query]).tolist()
 
@@ -137,15 +148,14 @@ class VectorStore:
         return chunks
 
     def clear(self):
-        """Delete all chunks."""
         try:
             self.client.delete_collection(self.collection.name)
-        except Exception:
-            pass  # already gone, no problem
-        
-        # recreate fresh empty collection
+        except Exception as e:
+            print(f"[VectorStore] Collection already gone: {e}")
+
+        # always recreate fresh, regardless of whether delete succeeded
         self.collection = self.client.get_or_create_collection(
-            name=self.collection.name,
+            name="rag_chunks",
             metadata={"hnsw:space": "cosine"}
         )
         print("[VectorStore] Cleared all chunks")
