@@ -1,5 +1,7 @@
 langchain
-langchain-community
+langchain-core
+langchain-groq
+langgraph
 chromadb
 sentence-transformers
 faster-whisper
@@ -12,4 +14,3 @@ gradio
 python-dotenv
 fastapi
 uvicorn
-google-generativeai
