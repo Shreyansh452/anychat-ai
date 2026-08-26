@@ -146,4 +146,4 @@ anychat-ai/
 ## 👤 Author
 
 Built by Shreyansh Mishra  
-[LinkedIn](https://www.linkedin.com/in/shreyansh452/) · [GitHub](https://github.com/Shreyansh452)
+[LinkedIn](https://www.linkedin.com/in/shreyansh452/) · [GitHub](https://github.com/Shreyansh452) · [YouTube](https://youtu.be/bdTHCKoRnQM?si=6RFSyfnfZlfi0laq)
