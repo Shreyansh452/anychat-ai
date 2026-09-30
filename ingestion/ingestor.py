@@ -1,5 +1,5 @@
 import os
-import fitz  # pymupdf
+import pymupdf
 import docx
 import cv2
 import base64
@@ -43,7 +43,7 @@ def chunk_text(text: str, chunk_size: int = 400, overlap: int = 50) -> List[str]
 # ── PDF ─────────────────────────────────────────────────────────────────────
 def pdf_page_to_base64(page) -> str:
     """Convert a PDF page to base64 image for vision model."""
-    mat = fitz.Matrix(2.0, 2.0)   # 2x zoom for better resolution
+    mat = pymupdf.Matrix(2.0, 2.0)   # 2x zoom for better resolution
     pix = page.get_pixmap(matrix=mat)
     img_bytes = pix.tobytes("jpeg")
     return base64.b64encode(img_bytes).decode("utf-8")
@@ -51,7 +51,7 @@ def pdf_page_to_base64(page) -> str:
 
 def ingest_pdf(filepath: str) -> List[Chunk]:
     chunks = []
-    doc = fitz.open(filepath)
+    doc = pymupdf.open(filepath)
 
     for page_num, page in enumerate(doc, start=1):
         text = page.get_text().strip()
