@@ -16,7 +16,7 @@ pinned: false
 
 # 🧠 AnyChat AI — Multimodal RAG Chatbot
 
-> Chat with **any document, audio, or video** using natural language. Get answers with exact page numbers and timestamps.
+> Chat with **any document, audio, or video** using natural language. Answers include source metadata such as document page numbers and audio/video timestamps, allowing users to verify the retrieved context.
 
 [![HF Spaces](https://img.shields.io/badge/🤗%20Hugging%20Face-Spaces-blue)](https://huggingface.co/spaces/mshreyansh452/anychat-ai)
 [![Python](https://img.shields.io/badge/Python-3.12-green)](https://python.org)
@@ -52,9 +52,35 @@ Upload any file — a research paper, a podcast, a lecture video — and have a 
 
 ## 🏗️ Architecture
 
-<p align="center">
-  <img src="architecture.png" width="1000"/>
-</p>
+                AnyChat AI
+                    │
+              Gradio Interface
+                    │
+              Session / UUID
+                    │
+          ┌─────────┴─────────┐
+          │     Ingestion     │
+          └─────────┬─────────┘
+                    │
+       ┌────────────┼────────────┐
+       ↓            ↓            ↓
+     PDF/DOCX      Audio        Video
+       │            │          /     \
+    PyMuPDF    faster-whisper Audio  Vision
+       │            │            \   /
+       └────────────┼─────────────┘
+                    ↓
+                 Chunks
+                    ↓
+             MiniLM Embeddings
+                    ↓
+               ChromaDB
+                    ↓
+              Top-K Retrieval
+                    ↓
+                Groq LLM
+                    ↓
+          Answer + Citations
 
 
 ## 🛠️ Tech Stack
@@ -133,7 +159,6 @@ anychat-ai/
 
 - [ ] Add YouTube URL ingestion support
 - [ ] Multi-turn conversation memory
-- [ ] Per-user/session isolated vector databases
 - [ ] Cross-encoder reranking for better retrieval accuracy
 - [ ] Semantic chunking instead of fixed-size chunking
 - [ ] Speaker diarization for multi-speaker audio/video
