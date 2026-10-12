@@ -53,6 +53,20 @@ def clear_all(store, files_set):
     except Exception as e:
         return f"❌ Clear failed: {str(e)}", "No files indexed yet.", [], store, files_set
 
+def format_sources(sources: list) -> str:
+    if not sources:
+        return ""
+    lines = ["\n\n---\n📎 **Sources**"]
+    for s in sources:
+        line = f"{s['n']}. `{s['file']}` ({s['type']})"
+        if "timestamp" in s:
+            line += f" · ⏱ {s['timestamp']}"
+        if "page" in s:
+            line += f" · 📄 page {s['page']}"
+        if "relevance" in s:
+            line += f" · match {s['relevance']}"
+        lines.append(line)
+    return "\n".join(lines)
 
 def chat(message, history, source_filter, store):
     if not isinstance(history, list):
@@ -64,7 +78,7 @@ def chat(message, history, source_filter, store):
 
     try:
         result = ask(message, source_filter=source_filter, store=store)
-        answer = result["answer"]
+        answer = result["answer"] + format_sources(result["sources"])
     except Exception as e:
         answer = f"❌ Error: {str(e)}"
 

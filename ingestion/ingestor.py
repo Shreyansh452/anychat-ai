@@ -179,7 +179,7 @@ def describe_keyframes(filepath: str) -> List[Chunk]:
                 image_b64 = base64.b64encode(buffer).decode("utf-8")
 
                 response = groq_client.chat.completions.create(
-                    model="qwen/qwen3.6-27b",
+                    model=os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.8-27b"),
                     messages=[{
                         "role": "user",
                         "content": [
