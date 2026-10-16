@@ -8,6 +8,7 @@ __pycache__/
 *.mp3
 *.mp4
 *.mkv
+*.pdf
 *.avi
 data/
 .gradio/

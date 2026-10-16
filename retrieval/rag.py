@@ -18,7 +18,7 @@ load_dotenv()
 
 llm = ChatGroq(
     api_key=os.getenv("GROQ_API_KEY"),
-    model=os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.8-27b"),
+    model=os.getenv("GROQ_CHAT_MODEL", "openai/gpt-oss-20b"),
     temperature=0.2
 )
 
@@ -46,7 +46,8 @@ class SourceTracker:
                 self._numbers[cid] = n
                 info = {"n": n, "file": name, "type": meta["source_type"]}
                 if "start_time" in meta:
-                    info["timestamp"] = fmt_time(meta["start_time"])
+                    end = meta.get("end_time") or meta["start_time"] + 30.0
+                    info["timestamp"] = f"{fmt_time(meta['start_time'])}–{fmt_time(end)}"
                 if "page" in meta:
                     info["page"] = meta["page"]
                 if r["distance"] > 0:  # exact lookups have no similarity score
@@ -55,13 +56,22 @@ class SourceTracker:
 
             n = self._numbers[cid]
             if "start_time" in meta:
-                label = f"[Source {n}: {name} at {fmt_time(meta['start_time'])}]"
+                end = meta.get("end_time") or meta["start_time"] + 30.0
+                label = f"[Source {n}: {name} at {fmt_time(meta['start_time'])}–{fmt_time(end)}]"
             elif "page" in meta:
                 label = f"[Source {n}: {name} page {meta['page']}]"
             else:
                 label = f"[Source {n}: {name}]"
             parts.append(f"{label}\n{r['text']}")
         return "\n\n".join(parts)
+
+    def label(self, n: int) -> str:
+        s = self.sources[n - 1]
+        if "timestamp" in s:
+            return f"{s['file']} {s['timestamp']}"
+        if "page" in s:
+            return f"{s['file']} p.{s['page']}"
+        return s["file"]
 
 
 def build_tools(store: VectorStore, tracker: SourceTracker):
@@ -76,38 +86,44 @@ def build_tools(store: VectorStore, tracker: SourceTracker):
         return tracker.context(results) if results else "No relevant information found."
 
     @tool
-    def timestamp_search(query: str) -> str:
-        """Find content at a specific time in video/audio. Pass the timestamp substring like '1:38'."""
-        match = re.search(r'(\d+):(\d{2})', query)
-        if not match:
-            return "Could not parse a timestamp."
-        seconds = int(match.group(1)) * 60 + int(match.group(2))
+    def timestamp_search(seconds: float) -> str:
+        """Find what is said or shown at one moment in a video or audio file.
+        Pass the time as TOTAL SECONDS. Convert first: 2:15 = 135, 4.7 minutes = 282, 1 hour 10 minutes = 4200."""
         all_chunks = store.collection.get(include=["documents", "metadatas"])
-        results = []
+        results, longest = [], 0.0
         for i, meta in enumerate(all_chunks["metadatas"]):
             start = meta.get("start_time")
             if start is None:
                 continue
             end = meta.get("end_time") or start + 30.0
+            longest = max(longest, end)
             if start <= seconds <= end:
                 results.append({"text": all_chunks["documents"][i], "metadata": meta,
                                 "distance": 0.0, "id": all_chunks["ids"][i]})
-        return tracker.context(results) if results else "No content found at that timestamp."
+        if results:
+            return tracker.context(results)
+        if longest == 0:
+            return "No video or audio is indexed."
+        return f"Nothing at {fmt_time(seconds)}. The indexed audio/video only runs to {fmt_time(longest)}."
 
     @tool
-    def page_search(query: str) -> str:
-        """Find content from a specific page number. Pass the page number."""
-        match = re.search(r'(\d+)', query)
-        if not match:
-            return "Could not parse a page number."
-        page_number = int(match.group(1))
+    def page_search(page: int) -> str:
+        """Find content on one page of a PDF. Pass the page number."""
         all_chunks = store.collection.get(include=["documents", "metadatas"])
-        results = []
+        results, pages = [], set()
         for i, meta in enumerate(all_chunks["metadatas"]):
-            if meta.get("page") == page_number:
+            p = meta.get("page")
+            if p is None:
+                continue
+            pages.add(p)
+            if p == page:
                 results.append({"text": all_chunks["documents"][i], "metadata": meta,
                                 "distance": 0.0, "id": all_chunks["ids"][i]})
-        return tracker.context(results) if results else f"No content found on page {page_number}."
+        if results:
+            return tracker.context(results)
+        if not pages:
+            return "No indexed file has pages. Page lookups only work for PDFs."
+        return f"No page {page}. The indexed documents have pages {min(pages)} to {max(pages)}."
 
     @tool
     def cross_source_search(query: str) -> str:
@@ -141,21 +157,26 @@ class AgentState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
 
 
+def indexed_files_status(store: VectorStore) -> str:
+    try:
+        data = store.collection.get(include=["metadatas"])
+        names = sorted({os.path.basename(m["source"]) for m in data["metadatas"]})
+    except Exception:
+        names = []
+    if not names:
+        return "No files are indexed yet."
+    if len(names) == 1:
+        return f"Only one file is indexed: {names[0]}. 'This file', 'the video' or 'the document' means it. Search it, don't ask which file."
+    return f"Indexed files: {', '.join(names)}. Use a search tool to answer questions about them."
+
+
 def build_graph(store: VectorStore, tracker: SourceTracker):
     tools = build_tools(store, tracker)
     llm_with_tools = llm.bind_tools(tools)
 
     def agent_node(state: AgentState):
-        try:
-            data = store.collection.get(include=["metadatas"])
-            names = sorted({os.path.basename(m["source"]) for m in data["metadatas"]})
-        except Exception:
-            names = []
-        status = (
-            f"Indexed files right now: {', '.join(names)}. Use a search tool to answer questions about them."
-            if names else "No files are indexed yet."
-        )
-        messages = [SystemMessage(content=SYSTEM_PROMPT + "\n\n" + status)] + state["messages"]
+        system = SYSTEM_PROMPT + "\n\n" + indexed_files_status(store)
+        messages = [SystemMessage(content=system)] + state["messages"]
         return {"messages": [llm_with_tools.invoke(messages)]}
 
     def should_continue(state: AgentState):
@@ -171,41 +192,45 @@ def build_graph(store: VectorStore, tracker: SourceTracker):
     return graph.compile()
 
 
+def humanize_citations(answer: str, tracker: SourceTracker) -> str:
+    def repl(m):
+        n = int(m.group(1))
+        return f"[{tracker.label(n)}]" if 1 <= n <= len(tracker.sources) else m.group(0)
+    return re.sub(r"\[Source (\d+)[^\]]*\]", repl, answer)
+
+
 def ask(question: str, top_k: int = 4, source_filter: str = None, store: VectorStore = None) -> dict:
     if store is None:
         raise ValueError("A VectorStore instance must be provided to ask()")
 
     tracker = SourceTracker()
 
-    # explicit filter from the UI: skip the agent, search directly
+    # explicit file-type filter from the UI: skip the agent, search directly
     if source_filter and source_filter.lower() != "all":
         results = store.search(question, top_k=top_k, source_filter=source_filter.lower())
         if not results:
             return {"answer": f"No relevant information found in {source_filter} files.", "sources": []}
         context = tracker.context(results)
         response = llm.invoke([
-            SystemMessage(content=FALLBACK_PROMPT),
-            HumanMessage(content=f"Context:\n{context}\n\nMessage: {question}")
+            SystemMessage(content=DIRECT_FILTER_PROMPT),
+            HumanMessage(content=f"Context:\n{context}\n\nQuestion: {question}")
         ])
-        return {"answer": response.content, "sources": tracker.sources}
+        return {"answer": humanize_citations(response.content, tracker), "sources": tracker.sources}
 
     try:
         app_graph = build_graph(store, tracker)
         result = app_graph.invoke({"messages": [HumanMessage(content=question)]})
-        print("[Agent] tool calls:", [tc["name"] for m in result["messages"] for tc in (getattr(m, "tool_calls", None) or [])])
-        return {"answer": result["messages"][-1].content, "sources": tracker.sources}
+        used = [tc["name"] for m in result["messages"] for tc in (getattr(m, "tool_calls", None) or [])]
+        print("[Agent] tool calls:", used)
+        return {"answer": humanize_citations(result["messages"][-1].content, tracker), "sources": tracker.sources}
     except Exception as e:
         print(f"[Agent] Failed: {e}")
         results = store.search(question, top_k=5)
         context = tracker.context(results) if results else "No files indexed."
         response = llm.invoke([
-            SystemMessage(content=(
-                "You are AnyChat AI, a document assistant. If the message is just a "
-                "greeting or small talk, reply briefly and ignore the context. "
-                "Otherwise answer from the context and cite [Source N]."
-            )),
+            SystemMessage(content=FALLBACK_PROMPT),
             HumanMessage(content=f"Context:\n{context}\n\nMessage: {question}")
         ])
         answer = response.content
         # only show sources if the answer actually used them
-        return {"answer": answer, "sources": tracker.sources if "[Source" in answer else []}
+        return {"answer": humanize_citations(answer, tracker), "sources": tracker.sources if "[Source" in answer else []}

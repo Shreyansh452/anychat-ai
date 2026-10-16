@@ -2,6 +2,7 @@ import os
 import pymupdf
 import docx
 import cv2
+import numpy as np
 import base64
 from groq import Groq
 from faster_whisper import WhisperModel
@@ -49,12 +50,121 @@ def pdf_page_to_base64(page) -> str:
     return base64.b64encode(img_bytes).decode("utf-8")
 
 
+def page_to_b64(page) -> str:
+    """Alias for pdf_page_to_base64 (kept for compatibility)."""
+    return pdf_page_to_base64(page)
+
+
+_ocr_engine = None
+
+def get_ocr():
+    global _ocr_engine
+    if _ocr_engine is None:
+        from rapidocr_onnxruntime import RapidOCR
+        _ocr_engine = RapidOCR()
+    return _ocr_engine
+
+
+def ocr_page(page):
+    """Returns (text, average confidence 0-1)."""
+    png = page.get_pixmap(matrix=pymupdf.Matrix(2, 2)).tobytes("png")
+    img = cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_COLOR)
+    result, _ = get_ocr()(img)
+    if not result:
+        return "", 0.0
+    text = "\n".join(r[1] for r in result)
+    conf = sum(float(r[2]) for r in result) / len(result)
+    return text, conf
+
+
+def vision_read_page(page) -> str:
+    """Use Groq vision model to read a PDF page."""
+    groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+    image_b64 = pdf_page_to_base64(page)
+    
+    response = groq_client.chat.completions.create(
+        model=os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.8-27b"),
+        messages=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{image_b64}"
+                    }
+                },
+                {
+                    "type": "text",
+                    "text": "Extract all text from this page exactly as it appears. Include headings, paragraphs, lists, tables, and any other text content."
+                }
+            ]
+        }],
+        max_tokens=1000
+    )
+    
+    return response.choices[0].message.content.strip()
+
+
+def read_page(page, page_num):
+    """Three-tier PDF reading: text layer → OCR → vision model."""
+    # tier 1: real text layer
+    text = page.get_text().strip()
+    if len(text) >= 50:
+        return text, "text"
+
+    # tier 2: OCR, accepted only if there's enough text and it looks confident
+    try:
+        text, conf = ocr_page(page)
+        if len(text) >= 80 and conf >= 0.80:
+            return text, "ocr"
+        print(f"[PDF] page {page_num}: OCR weak ({len(text)} chars, conf {conf:.2f}), using vision")
+    except Exception as e:
+        print(f"[PDF] page {page_num}: OCR failed ({e}), using vision")
+
+    # tier 3: vision model
+    try:
+        return vision_read_page(page), "vision"
+    except Exception as e:
+        print(f"[PDF] page {page_num}: vision failed ({e})")
+        return "", "none"
+
+
+MAX_FIGURE_PAGES = 10  # cap vision calls per document
+
+
+def page_has_figures(page) -> bool:
+    try:
+        return len(page.get_drawings()) >= 15 or len(page.get_images()) > 0
+    except Exception:
+        return False
+
+
+def vision_describe_figure(page) -> str:
+    groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+    response = groq_client.chat.completions.create(
+        model=os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.8-27b"),
+        messages=[{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{pdf_page_to_base64(page)}"}},
+            {"type": "text", "text": "Describe any charts, diagrams, or figures on this page: what each one shows, "
+                                     "the labels, and the key values or relationships. Ignore plain paragraphs. "
+                                     "If there is no figure, reply with exactly NONE."},
+        ]}],
+        max_tokens=500,
+    )
+    return response.choices[0].message.content.strip()
+
+
 def ingest_pdf(filepath: str) -> List[Chunk]:
     chunks = []
     doc = pymupdf.open(filepath)
+    figure_calls = 0
 
     for page_num, page in enumerate(doc, start=1):
-        text = page.get_text().strip()
+        text, method = read_page(page, page_num)
+        if not text:
+            continue
+        print(f"[PDF] page {page_num} read via {method}")
+        
         for idx, chunk_text_part in enumerate(chunk_text(text)):
             chunks.append(Chunk(
                 text=chunk_text_part,
@@ -63,6 +173,21 @@ def ingest_pdf(filepath: str) -> List[Chunk]:
                 chunk_index=len(chunks),
                 page=page_num,
             ))
+
+        # extra pass: describe figures on real-text pages
+        if method == "text" and figure_calls < MAX_FIGURE_PAGES and page_has_figures(page):
+            try:
+                desc = vision_describe_figure(page)
+                figure_calls += 1
+                if desc and desc.upper() != "NONE":
+                    chunks.append(Chunk(
+                        text=f"[Figure on page {page_num}] {desc}",
+                        source=filepath, source_type="pdf",
+                        chunk_index=len(chunks), page=page_num,
+                    ))
+                    print(f"[PDF] page {page_num}: figure described")
+            except Exception as e:
+                print(f"[PDF] page {page_num}: figure vision failed ({e})")
 
     print(f"[PDF] {len(chunks)} chunks from {filepath}")
     return chunks
