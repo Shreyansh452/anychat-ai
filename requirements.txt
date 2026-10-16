@@ -13,4 +13,7 @@ groq
 gradio
 python-dotenv
 fastapi
-uvicornrapidocr-onnxruntime
+uvicorn
+rapidocr-onnxruntime
+
+
